@@ -227,6 +227,33 @@ unsafe impl<'id> Send for GgToken<'id> {}
 
 unsafe impl<'id> Sync for GgToken<'id> {}
 
+fn visit(frontier: &mut LinkedList<usize>,
+    visited: &mut HashSet<usize>,
+    map: &HashMap<usize, &NodeRef<i32, i32>>,
+    node_id: usize, each: FnOnce(&i32) -> ()) {
+
+    // Cerchiamo tramite l'indetificatore se il nodo passato come
+    // parametro è presente nella mappa. Se è presente visita il
+    // nodo e inserisci i suoi archi in frontiera, altrimenti ritorna.
+    match map.get(&node_id) {
+        None => {
+            return;
+        }
+        Some(node) => {
+            // Controlla che il nodo non sia già stato visitato.
+            if !visited.contains(&node.node_id()) {
+                // Codice personalizzato.
+                each(&(***node));
+                // Aggiungi il nodo insieme a quelli già visitati.
+                visited.replace(node.node_id());
+                // Inserisci in frontiera i nodi adiacenti (archi).
+                for link_id in node.links_ids() {
+                    frontier.push_back(link_id);
+                }
+            }
+        }
+    }
+}
 
 fn main() {
     // Esempio di utilizzo della funzione visit
