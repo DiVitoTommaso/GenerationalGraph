@@ -230,7 +230,7 @@ unsafe impl<'id> Sync for GgToken<'id> {}
 fn visit(frontier: &mut LinkedList<usize>,
     visited: &mut HashSet<usize>,
     map: &HashMap<usize, &NodeRef<i32, i32>>,
-    node_id: usize, each: FnOnce(&i32) -> ()) {
+    node_id: usize, each: impl FnOnce(&i32) -> ()) {
 
     // Cerchiamo tramite l'indetificatore se il nodo passato come
     // parametro è presente nella mappa. Se è presente visita il
