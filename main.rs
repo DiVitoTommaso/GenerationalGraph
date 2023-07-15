@@ -31,18 +31,11 @@ pub struct Node<T, G> {
     links: HashMap<*mut Node<T, G>, G>,
     value: T,
 }
-
-// Definizione della struttura dati incaricata di gestire i nodi del grafo (allocazione e deallocazione quando viene droppata)
-// Si utilizza il concetto di arena dove i nodi non vengono deallocati singolarmente in modo da non introdurre overhead a casa di eventuali link counters
-// è comunque possibile realizzare questa struttura dati in modo che i nodi possano essere deallocati singolarmente ma non a overhead 0
 pub struct GenerationalGraph<'id, T, G> {
     nodes: Arena<Node<T, G>>,
     _marker: CovariantLifetime<'id>,
 }
 
-// Nodo di tipo invariante ritornato da un allocazione fatta sul network. Contiene 2 lifetimes
-// Il primo serve per legare il suo tempo di vita a quello del network a cui appartiene. Il secondo serve per brandizzare
-// il riferimento in modo che non sia utilizzabile per effettuare dei link tra nodi di grafi diversi direttamente.
 pub struct NodeRef<'a, 'id, 'b, T, G> {
     ptr: *mut Node<T, G>,
     _marker1: CovariantLifetime<'a>,
@@ -51,10 +44,7 @@ pub struct NodeRef<'a, 'id, 'b, T, G> {
 }
 
 impl<'id, T, G> GenerationalGraph<'id, T, G> {
-    // implementazione della new di un network. La chiusura serve per brandizzare il network e tutti i nodi generati da esso
-    // e per impedire che essi possano essere utilizzati in metodi di altri network direttamente, il token di autorizzazione
-    // invece serve a controllare l'accesso mutabile o immutabile perchè come possiamo notare lo smart pointer richiede un riferimento
-    // immutabile per eseguire modifiche mutabili cosa che senza token violerebbe le regole di Rust Safe.
+    
     pub fn new(f: impl for<'a> FnOnce(GenerationalGraph<'a, T, G>, GgToken<'a>) -> ()) {
         f(GenerationalGraph {
             nodes: Arena::new(),
@@ -65,7 +55,6 @@ impl<'id, T, G> GenerationalGraph<'id, T, G> {
           })
     }
 
-    // crea un nuovo nodo e ritorna un riferimento mutabile al nodo (riferimento inteso come struttura che permette Deref mutabile)
     pub fn add<'a>(&'a self, val: T, token: &mut GgToken<'id>) -> NodeRef<'a, 'id, 'a, T, G> {
         let node = self.nodes.alloc(
             Node {
@@ -85,47 +74,36 @@ impl<'id, T, G> GenerationalGraph<'id, T, G> {
 impl<'a, 'id, 'b, T, G> Deref for NodeRef<'a, 'id, 'b, T, G> {
     type Target = T;
 
-    // Deref di un nodo del network
     fn deref(&self) -> &Self::Target {
         unsafe { &(*self.ptr).value }
     }
 }
 
 impl<'a, 'id, 'b, T, G> DerefMut for NodeRef<'a, 'id, 'b, T, G> {
-    // deref mut di un nodo del network
+    
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe { &mut (*self.ptr).value }
     }
 }
 
 impl<'a, 'id, 'b, T, G> NodeRef<'a, 'id, 'b, T, G> {
-    // metodo che permette il linking di nodi appartenenti allo stesso network.
-    // Token mutabile richiesto in quanto stiamo modificando lo stato del network
+    
     pub fn link(&mut self, other: &NodeRef<'_, 'id, '_, T, G>, cost: G) {
         unsafe { (*self.ptr).links.insert(other.ptr, cost); }
     }
 
-    // metodo che permette l'unlink di nodi appartenenti allo stesso newtork.
-    // Token mutabile richiesto in quanto stiamo modificando lo stato del network
     pub fn unlink(&mut self, other: &NodeRef<'_, 'id, '_, T, G>) {
         unsafe { (*self.ptr).links.remove(&other.ptr); }
     }
 
-    // metodo che permette di fare il linking tra nodi di network (Vive -) -> (Vive +)
-    // Token mutabile richiesto in quanto stiamo modificando lo stato del network
     pub fn link_outer(&mut self, other: &NodeRef<'a, '_, '_, T, G>, cost: G) {
         unsafe { (*self.ptr).links.insert(other.ptr, cost); }
     }
 
-    // metodo che permette di fare l'unlink tra nodi di network (Vive -) -> (Vive +)
-    // Token mutabile richiesto in quanto stiamo modificando lo stato del network
     pub fn unlink_outer(&mut self, other: &NodeRef<'a, '_, '_, T, G>) {
         unsafe { (*self.ptr).links.remove(&other.ptr); }
     }
 
-    // metodo che permette di fare il linking tra nodi di network (Vive +) -> (Vive -)
-    // Token mutabile richiesto in quanto stiamo modificando lo stato del network
-    // NB: Si utilizza una chiusura per eseguire il codice con il link attivo quando termina il link viene droppato
     pub fn link_inner(&mut self, other: &NodeRef<'_, '_, 'a, T, G>, cost: G,
                       with_link: impl FnOnce(&mut NodeRef<'a, 'id, 'b, T, G>) -> ()) {
         unsafe {
