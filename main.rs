@@ -94,13 +94,13 @@ impl<'id, T, G> GenerationalGraph<'id, T, G> {
         }
     }
 
-    pub fn visit<R>(&self, root: &NodeRef<'_ , '_ ,'_, T, G> , each: fn(&NodeVisit<T, G>) -> R) {
+    pub fn visit<R>(&self, root: &NodeRef<'_, '_, '_, T, G> , each: fn(&NodeVisit<T, G>) -> R) {
         unsafe {
             each(mem::transmute(root));
         }
     }
 
-    pub fn visit_multiple<R>(&self, roots: Vec<&NodeRef<'_ , '_ ,'_, T, G>> , each: fn(Vec<&NodeVisit<T, G>>) -> R) {
+    pub fn visit_multiple<R>(&self, roots: Vec<&NodeRef<'_, '_, '_, T, G>> , each: fn(Vec<&NodeVisit<T, G>>) -> R) {
         unsafe {
             each(mem::transmute(roots));
         }
