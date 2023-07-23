@@ -8,41 +8,36 @@ use std::hash::{Hash, Hasher};
 use std::ptr::null_mut;
 use typed_arena::Arena;
 
-// Definizione di lifetime di vario tipo per la validazione dei raw pointer contenuti nelle strutture ritornate e per il branding dei nodi
-
 struct CovariantLifetime<'id>(PhantomData<&'id ()>);
-
 struct InvariantLifetime<'id>(PhantomData<*mut &'id ()>);
-
 struct ContravariantLifetime<'id>(PhantomData<fn(&'id ()) -> ()>);
 
-// Definizione di un token di autorizzazione per regolare il controllo degli accessi ai grafi
 pub struct GgToken<'id> {
     _marker: InvariantLifetime<'id>,
 }
 
-// Nodo di un Grafo contenente il valore che possiede e un set/lista di puntatori a altri nodi per rappresentare gli archi
 pub struct Node<T, G> {
     links: HashMap<*mut Node<T, G>, G>,
     value: T,
 }
 
-// Definizione della struttura dati incaricata di gestire i nodi del grafo (allocazione e deallocazione quando viene droppata)
-// Si utilizza il concetto di arena dove i nodi non vengono deallocati singolarmente in modo da non introdurre overhead a casa di eventuali link counters
-// è comunque possibile realizzare questa struttura dati in modo che i nodi possano essere deallocati singolarmente ma non a overhead 0
 pub struct GenerationalGraph<'id, T, G> {
     nodes: Arena<Node<T, G>>,
     _marker: CovariantLifetime<'id>,
 }
 
-// Nodo di tipo invariante ritornato da un allocazione fatta sul network. Contiene 2 lifetimes
-// Il primo serve per legare il suo tempo di vita a quello del network a cui appartiene. Il secondo serve per brandizzare
-// il riferimento in modo che non sia utilizzabile per effettuare dei link tra nodi di grafi diversi direttamente.
 pub struct NodeRef<'a, 'id, 'b, T, G> {
     ptr: *mut Node<T, G>,
     _marker1: CovariantLifetime<'a>,
     _marker2: InvariantLifetime<'id>,
     _marker3: ContravariantLifetime<'b>,
+}
+
+pub struct LinkHandle<'a, 'c, T, G> {
+    source: *mut Node<T, G>,
+    dest: *mut Node<T, G>,
+    _marker1: InvariantLifetime<'a>,
+    _marker2: InvariantLifetime<'c>,
 }
 
 pub struct NodeVisit<T, G> {
@@ -110,35 +105,27 @@ impl<'id, T, G> GenerationalGraph<'id, T, G> {
 impl<'a, 'id, 'b, T, G> Deref for NodeRef<'a, 'id, 'b, T, G> {
     type Target = T;
 
-    // Deref di un nodo del network
     fn deref(&self) -> &Self::Target {
         unsafe { &(*self.ptr).value }
     }
 }
 
 impl<'a, 'id, 'b, T, G> DerefMut for NodeRef<'a, 'id, 'b, T, G> {
-    // deref mut di un nodo del network
+    
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe { &mut (*self.ptr).value }
     }
 }
 
 impl<'a, 'id, 'b, T, G> NodeRef<'a, 'id, 'b, T, G> {
-    // metodo che permette il linking di nodi appartenenti allo stesso network.
-    // Token mutabile richiesto in quanto stiamo modificando lo stato del network
     pub fn link(&mut self, other: &NodeRef<'a, 'id, '_, T, G>, cost: G) {
         unsafe { (*self.ptr).links.insert(other.ptr, cost); }
     }
 
-    // metodo che permette di fare il linking tra nodi di network (Vive -) -> (Vive +)
-    // Token mutabile richiesto in quanto stiamo modificando lo stato del network
     pub fn link_outer(&mut self, other: &NodeRef<'a, '_, '_, T, G>, cost: G) {
         unsafe { (*self.ptr).links.insert(other.ptr, cost); }
     }
 
-    // metodo che permette di fare il linking tra nodi di network (Vive +) -> (Vive -)
-    // Token mutabile richiesto in quanto stiamo modificando lo stato del network
-    // NB: Si utilizza una chiusura per eseguire il codice con il link attivo quando termina il link viene droppato
     pub fn link_inner<'c>(&mut self, other: &NodeRef<'c, '_, 'a, T, G>, cost: G) -> LinkHandle<'a, 'c, T, G> {
         unsafe {
             (*self.ptr).links.insert(other.ptr, cost);
@@ -152,8 +139,6 @@ impl<'a, 'id, 'b, T, G> NodeRef<'a, 'id, 'b, T, G> {
         }
     }
 
-    // metodo che permette l'unlink di nodi appartenenti allo stesso newtork.
-    // Token mutabile richiesto in quanto stiamo modificando lo stato del network
     pub fn unlink(&mut self, other: &NodeRef<'_, '_, '_, T, G>) {
         unsafe { (*self.ptr).links.remove(&other.ptr); }
     }
@@ -183,19 +168,6 @@ impl<'a, 'id, 'b, T, G> NodeRef<'a, 'id, 'b, T, G> {
     }
 }
 
-pub struct LinkHandle<'a, 'c, T, G> {
-    source: *mut Node<T, G>,
-    dest: *mut Node<T, G>,
-    _marker1: InvariantLifetime<'a>,
-    _marker2: InvariantLifetime<'c>,
-}
-
-unsafe impl Send for GgToken<'_> {}
-unsafe impl Sync for GgToken<'_> {}
-
-unsafe impl<T: Sync, G: Sync> Sync for GenerationalGraph<'_, T, G> {}
-unsafe impl<T: Sync, G: Sync> Sync for NodeRef<'_, '_, '_, T, G> {}
-
 impl<'a, 'c, T, G> Drop for LinkHandle<'a, 'c, T, G> {
     fn drop(&mut self) {
         unsafe {
@@ -203,6 +175,12 @@ impl<'a, 'c, T, G> Drop for LinkHandle<'a, 'c, T, G> {
         }
     }
 }
+
+unsafe impl Send for GgToken<'_> {}
+unsafe impl Sync for GgToken<'_> {}
+
+unsafe impl<T: Sync, G: Sync> Sync for GenerationalGraph<'_, T, G> {}
+unsafe impl<T: Sync, G: Sync> Sync for NodeRef<'_, '_, '_, T, G> {}
 
 fn main() {
     GenerationalGraph::new(|graph1, mut token1| {
@@ -215,7 +193,9 @@ fn main() {
         GenerationalGraph::new(|graph2, mut token2| {
             let mut y1 = graph2.add(1, &mut token2);
             y1.link_outer(&x1, 1);
-            x1.link_inner(&y1, 1);
+            let handle = x1.link_inner(&y1, 1);
+
+            // ...
         });
     });
 }
